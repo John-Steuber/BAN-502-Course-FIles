@@ -1,0 +1,190 @@
+---
+title: "SteuberMod2MultipleLR"
+author: "John Steuber"
+date: "1/31/2021"
+output: word_document
+---
+```{r}
+#loading packages
+library(tidyverse)
+library(tidymodels)
+library(glmnet)
+library(GGally)
+library(ggcorrplot)
+library(MASS)
+library(lubridate)
+library(lmtest)
+```
+```{r echo = T, results='hide'}
+#task 1
+bike <- read.csv("bike_cleaned.csv")
+bike = bike %>%
+  mutate(dteday = mdy(dteday))
+
+#converting characters into factors
+bike %>%
+  mutate(season = as.factor(season),
+         mnth = as.factor(mnth),
+         holiday = as.factor(holiday),
+         weekday = as.factor(weekday),
+         workingday = as.factor(workingday),
+         weathersit = as.factor(weathersit))
+
+#converting hr into factor
+bike %>%
+  mutate(hr = as.factor(hr))
+```
+
+We convert the hr variables into a factor because it may have interaction with other variables in the dataset. If hr was just a number and not a factor, we would not be able to quantify that interaction in our models.
+
+```{r}
+#task 2
+ggcorr(bike, label = TRUE)
+```
+The quantitative variables best correlated with count is either atemp or temp. Because they both have values of 0.4, I am going to quickly run the cor function for the variables.
+
+```{r}
+#task 2 continued
+x <- bike$temp
+y <- bike$count
+z <- bike$atemp
+
+cor(x, y)
+cor(z, y)
+```
+Thanks to the cor function, we can see that temp has a slightly higher correlation with count than atempt does. We can conclude that Temp is the quantitative variable that is most correlated with count.
+
+```{r}
+#task 3
+ggplot(bike,aes(x=hr,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=season,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=mnth,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=holiday,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=weekday,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=workingday,y=count)) + 
+  geom_boxplot() + theme_bw()
+ggplot(bike,aes(x=weathersit,y=count)) + 
+  geom_boxplot() + theme_bw()
+```
+DISCLAIMER: I am not entirely sure why my first chart plotting hr and count is not appearing correctly. I followed code as depicted in the instructions.
+
+Based on the chart provided in the instructions, hr does affect count. We see a clear spike in bike rentals from hours 8 - 17 before declining beginning around hour 18. This makes sense, as we can reasonable expect bike rentals to be highest during times when there is sufficient daylight. 
+
+Season also looks to be affecting the count variable, as there is a clear drop-off in rentals in the winter months. Summer also has a higher median amount of rentals than the other seasons. This makes sense, as people are more likely to be doing outdoor activities in warmer months. As such, the mnth variable also has an affect on count. May through June, we see higher median rentals than in the other months of the year.
+
+Holidays also effect count. There are more rentals on non holidays than there are on holidays. This makes sense, as we can expect people to be with families, or enjoying their time off during a holiday.
+
+Weekday does not seem to have a drastic affect on count, however it interesting that weekdays have higher median count values than the weekend days. It could be that commuters rent a significant amount of bicycles during the work week. This theory looks to be upheld by the fat that WorkingDay has a higher median count value than NotWorkingDay.
+
+Finally, we can see that weatheresit does have a sizable impact on count. Days with heavy precipitation see the lowest median count value, and as precipitation lessens the median count value increases. This makes sense because we would not expect people to be riding bikes if there is a risk of getting rained on, snowed on, hailed on, etc..
+
+```{r}
+#task 4
+#I am using mnth as my 'best' variable
+
+count_model1 = recipe(count ~ mnth, bike)
+
+lm_model = #give the model type a name 
+  linear_reg() %>% #specify that we are doing linear regression
+  set_engine("lm") #specify the specify type of linear tool we want to use 
+
+lm_wflow = 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(count_model1)
+
+lm_fit = fit(lm_wflow, bike)
+```
+```{r}
+summary(lm_fit$fit$fit$fit)
+```
+We can see that this model is of poor quality. The R squared value of .07505 indicates that mnth is not a viable predictor of count. 
+```{r}
+ggplot(bike, aes(x=mnth,y=count)) + geom_point() + 
+  geom_smooth(method="lm",se=FALSE, color="red") + theme_bw() #plotting out the model
+```
+
+
+```{r}
+#task 5
+ridge_recipe = recipe(count ~ hr + temp + atemp + hum + windspeed, bike) %>%
+  step_center(all_predictors()) %>% # centering predictors
+  step_scale(all_predictors())#scaling the predictors
+
+ridge_model = 
+  linear_reg(mixture = 0) %>%
+  set_engine("glmnet")
+
+ridge_wflow = 
+  workflow() %>%
+  add_model(ridge_model) %>%
+  add_recipe(ridge_recipe)
+
+ridge_fit = fit(ridge_wflow, bike)
+```
+```{r}
+ridge_fit
+```
+```{r}
+ridge_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit")
+```
+```{r}
+ridge_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit") %>%
+  coef(s = 20)
+```
+
+
+I chose a lambda of 30 for the ridge regression model, because we can see the R squared value begin to level off around 32.3 with very minimal gains after. The low R squared value allows us to reasonably conclude that this model is not the best predictor of count. Additionally, the low beta values of the hum variable indicates that it may not be a good predictor variable in this model.
+```{r}
+#task 6
+lasso_recipe = recipe(count ~ hr + temp + atemp + hum + windspeed, bike)%>%
+   step_center(all_predictors()) %>% # centering predictors
+  step_scale(all_predictors())#scaling the predictors
+
+lasso_model = 
+  linear_reg(mixture = 1) %>%
+  set_engine("glmnet")
+
+lasso_wflow = 
+  workflow() %>%
+  add_model(lasso_model) %>%
+  add_recipe(lasso_recipe)
+
+lasso_fit = fit(lasso_wflow, bike)
+lasso_fit
+```
+```{r}
+lasso_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit")
+```
+```{r}
+lasso_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit") %>%
+  coef(s = 0.926) # I am using a lambda of 0.926, a we can see the R squared value does not increase above 32.63. 0.926 is the first lamba for which the R squared value is 32.63
+```
+
+With the selected lambda value of 0.926, the model is again showing us that windspeed is not a great predictor variable. As with the Ridge model, the lasso model has a low R squared ceiling of around 32.6.
+
+The Ridge and Lasso models are giving us a minimal difference in quality. Both models have a 'best' R squared value in the 32.6 range. The models tell us that the selected predictor variables are not painting a full picture, and they do not provide a good prediction of the numbber of bikes being rented at any given time.
+
+
+
+
+
+
+
+
+
+
+

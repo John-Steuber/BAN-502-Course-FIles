@@ -1,0 +1,427 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+### Module 3 Assignment 2
+## John Steuber
+```{r}
+#Loading Packages
+library(tidyverse)
+library(tidymodels)
+library(e1071)
+library(ROCR)
+```
+
+
+```{r}
+#loading in the dataset
+parole <- read_csv("parole.csv")
+```
+```{r}
+#converting necessary variables into factors and recoding
+parole = parole %>%
+  mutate(male = as_factor(male)) %>%
+  mutate(male = fct_recode(male, "male" = "1", "female" = "0")) %>%
+   mutate(race = as_factor(race)) %>%
+  mutate(race = fct_recode(race, "white" = "1", "other" = "2")) %>%
+   mutate(state = as_factor(state)) %>%
+  mutate(state = fct_recode(state, "Kentucky" = "2", "Louisiana" = "3", "Virginia" = "4", "Other" = "1")) %>%
+   mutate(crime = as_factor(crime)) %>%
+  mutate(crime = fct_recode(crime, "larceny" = "2", "drug-related crime" = "3", "driving-related crime" = "4", "other" = "1")) %>%
+   mutate(multiple.offenses = as_factor(multiple.offenses)) %>%
+  mutate(multiple.offenses = fct_recode(multiple.offenses, "yes" = "1", "no" = "0")) %>%
+  mutate(violator = as_factor(violator)) %>%
+  mutate(violator = fct_recode(violator, "yes" = "1", "no" = "0"))
+```
+
+```{r Task 1}
+#creating our training and testing splits
+set.seed(12345) 
+parole_split = initial_split(parole, prob = 0.70, strata = violator) #setting 70% of data to be in the training split
+train = training(parole_split)
+test = testing(parole_split)
+```
+
+I am now going to utilize various plots and tables to examine the relationship between the variables and the "violator" variable
+
+```{r}
+ggplot(train, aes(x=male, fill = violator)) +
+  geom_bar()
+```
+There are more male violators than female, but I want to see this in a table to look at the proportions.
+
+```{r}
+t1 = table(train$violator,train$male)
+prop.table(t1, margin = 2)
+```
+Very similar rates of parole violation among males and females. Not anything significant between the two genders
+
+```{r}
+ggplot(train, aes(x=race, fill = violator)) +
+  geom_bar()
+```
+Proportionally, other races are more likely to violate parole. I want to see the actual %, so I am making a table
+
+```{r}
+t2 = table(train$violator,train$race)
+prop.table(t2, margin = 2)
+```
+Looks like other races are roughly 2.63% more likely to violate parole. Not a huge difference here.
+
+```{r}
+ggplot(train, aes(x=violator, y = age)) +
+  geom_boxplot()
+```
+The median age for those that violate and those that don't violate is about the same. It does look like those who are younger are more likely to commit parole. 
+
+```{r}
+ggplot(train, aes(x=state, fill = violator)) +
+  geom_bar()
+```
+Louisiana certainly has the highest proportion of parolees that violate their parole. Let's look at a table for some more information
+
+```{r}
+t3 = table(train$violator,train$state)
+prop.table(t3, margin = 2)
+```
+The table confirms the bar chart above. Louisiana is far and away the state with the most parole violations as a %.
+
+```{r}
+ggplot(train, aes(x=violator, y = time.served)) +
+  geom_boxplot()
+```
+
+Less time serves seems to lend itself to violation of parole, but it is not a big difference.
+
+```{r}
+ggplot(train, aes(x=violator, y = max.sentence)) +
+  geom_boxplot()
+```
+Higher maximum sentence --> less likely to violate parole
+
+```{r}
+ggplot(train, aes(x=multiple.offenses, fill = violator)) +
+  geom_bar()
+
+t4 = table(train$violator,train$multiple.offenses)
+prop.table(t4, margin = 2)
+```
+Multiple offenses means about 7% more likely to violate parole
+
+```{r}
+ggplot(train, aes(x=crime, fill = violator)) +
+  geom_bar()
+
+t5 = table(train$violator,train$crime)
+prop.table(t5, margin = 2)
+```
+
+Driving related offense --> about 1/2 as likely to violate parole as the other offenses. Should be noted that there is not really a difference in violation rates between, larceny, drug, or other crimes. They are all at about 12.5% violation rate
+
+Based on the analysis conducted in task 2, I am going to use State as my best predictor of Violator. With Louisiana having a very high violation rate, Virginia having a comparatively low violation rate, and Kentucky and other states having similar violation rates, I believe it is the best predictor compared to the other variables.
+
+```{r Task 3}
+#creating logistic regression model
+violator_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator_recipe = recipe(violator ~ state, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator_recipe) %>% 
+  add_model(violator_model)
+
+violator_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator_fit$fit$fit$fit)
+```
+The model mirrors what the data initially showed. Parolees in Louisiana are much more likely to commit violation of parole than parolees in Kentucky or Virginia. One thing to note is that Kentucky is not a significant variable in this model. The AIC of 308.7 seems low, but I will need to check other models before I can conclude the quality of this one.
+
+```{r}
+#Task 4
+#I am going to start by using all variables and then removing
+#creating logistic regression model
+violator2_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator2_recipe = recipe(violator ~ ., train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator2_recipe) %>% 
+  add_model(violator2_model)
+
+violator2_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator2_fit$fit$fit$fit)
+
+```
+Although the AIC of this model is lower than my model with only State as a predictor, there are several variables that are not contributing. I am going to keep state and multiple offenses because they are still significant. I also want to keep race and max sentence, as those variables showed some correlation with violation based on the graphs and tables created.
+
+```{r}
+violator3_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator3_recipe = recipe(violator ~ state + max.sentence + multiple.offenses + race, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator3_recipe) %>% 
+  add_model(violator3_model)
+
+violator3_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator3_fit$fit$fit$fit)
+```
+
+This model is even better than the one with all variables. Race amd maximum sentence do not seem to be contributing, so I will remove them one at a time just to be sure.
+
+```{r}
+#model without race
+violator4_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator4_recipe = recipe(violator ~ state + max.sentence + multiple.offenses, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator4_recipe) %>% 
+  add_model(violator4_model)
+
+violator4_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator4_fit$fit$fit$fit)
+```
+Slightly lower AIC without race, max sentence has a near identical p value.
+
+Now let's try a model that includes race and omits max sentence.
+
+```{r}
+violator5_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator5_recipe = recipe(violator ~ state + multiple.offenses + race, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator5_recipe) %>% 
+  add_model(violator3_model)
+
+violator5_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator5_fit$fit$fit$fit)
+```
+Race is still not significant, the AIC is hardly improved.
+
+I will remove race and create a final model with only state and multiple offenses
+
+```{r}
+violator6_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator6_recipe = recipe(violator ~ state + multiple.offenses, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator6_recipe) %>% 
+  add_model(violator6_model)
+
+violator6_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator6_fit$fit$fit$fit)
+```
+The 6th version of the logistic regression has the lowest AIC but not by much. The only insignificant variable is stateKentucky, but the other states are significant in the regression. I would like to note that the 'intuitiveness'of this model may not be clear at first. 
+
+Sure, a criminal with multiple offenses being more likely to commit parole violation...that makes plenty of sense. These are people that are likely in and out of the criminal justice system, and that makes them more likely to be able to commit a parole violation.
+
+What I find really intriguing is that parolees in Louisiana are much more likely to violate parole than in the other states. I doubt that this is a purely geographical bias, as being in one location does not inherently make you more likely to commit a crime. I suspect that  Louisiana has more parolees with multiple offenses. Lets explore that idea:
+
+
+Here is the chart with vioaltors by state once again
+```{r}
+ggplot(train, aes(x=state, fill = violator)) +
+  geom_bar()
+```
+Now lets take a look at the data shaded by other factors than violator
+
+```{r}
+ggplot(train, aes(x=state, fill = multiple.offenses)) +
+  geom_bar()
+
+t6 = table(train$multiple.offenses,train$state)
+prop.table(t6, margin = 2)
+```
+
+From the table and the graph, we can see that Louisiana and Virginia parolees are much more likely to have multiple offesnes. Surprised at Virginia leading here, because they have the lowest violation rate
+
+I want to examine max sentence as the fill variable now
+
+```{r}
+ggplot(train, aes(x=state, y = max.sentence)) +
+  geom_point()
+
+```
+This graph is definitely a bit crude, but it illustrates that Louisiana has more parolees with lower maximum sentences than the other states. There is a correlation between lower max sentence and violating parole, as I saw in my visualizations earlier.
+
+I am still quite surprised by the multiple offense numbers for Virginia though. Although Louisiana also has a high proportion of parolees with multiple offenses, I did not expect the state with the highest likelihood of violation to be overshadowed by the state with the least likelihood of a parolee to violate.
+
+Perhaps the data is unbalanced.
+
+
+```{r Task 5}
+violator7_model = 
+  logistic_reg(mode = "classification") %>% #note the use of logistic_reg and mode = "classification"
+  set_engine("glm") #standard logistic regression engine is glm
+
+violator7_recipe = recipe(violator ~ state + multiple.offenses + race, train)
+
+logreg_wf = workflow() %>%
+  add_recipe(violator7_recipe) %>% 
+  add_model(violator7_model)
+
+violator7_fit = fit(logreg_wf, train)
+
+#lets check model quality
+summary(violator7_fit$fit$fit$fit)
+```
+The model has and AIC score of 289.99, which is just about as good as the model I created in task 4 with only state and multiple offenses. State and multiple offenses are significant, with race being insignificant. Particularly, Virginia is the significant state. If a Parolee is from Virginia, they are far less likely to violate parole.
+
+
+```{r Task 6}
+#Predictions on sample passengers
+newdata = data.frame(state = "Louisiana", multiple.offenses = "yes", race = "white")
+predict(violator7_fit, newdata, type = "prob")
+```
+
+Parolee1 has a 44.3% chance of violating their parole
+
+Lets see Parolee2
+```{r}
+newdata2 = data.frame(state = "Kentucky", multiple.offenses = "no", race = "other")
+predict(violator7_fit, newdata2, type = "prob")
+```
+
+Parolee2 is much better off, with only a 15.21% chance of violating their parole. 
+
+```{r Task 7}
+#ROC curve creation
+#I will first develop my predictions
+predictions = predict(violator7_fit, train, type="prob")
+head(predictions)
+
+```
+
+```{r}
+#I just want the "Yes" predictions
+predictions = predict(violator7_fit, train, type="prob")[2] #the [2] extracts only the Yes column
+head(predictions)
+```
+
+```{r}
+#threshold selection
+ROCRpred = prediction(predictions, train$violator)
+
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize = TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2, 1.7))
+```
+
+```{r}
+#evaluating threshold to balance sensitivety and specificity
+opt.cut = function(perf, pred){
+  cut.ind = mapply(FUN=function(x, y, p){
+    d = (x-0)^2 +(y-1)^2
+    ind=which(d==min(d))
+    c(sensitivity = y[[ind]], specificity = 1-x[[ind]],
+      cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+
+print(opt.cut(ROCRperf, ROCRpred))
+```
+
+Based on the above, our best threshold is 0.1070172. Let's test that value
+```{r}
+#testing threshold to evaluate accuracy
+#confusion matrix, no and yes are actual values, false and true are predicted values
+t8 = table(train$violator, predictions > 0.1070172)
+t8
+```
+
+Now we can calculate accuracy, sensitivity, and specificity
+
+```{r task 8}
+#task 8
+
+accuracy1 <- (t8[1,1]+t8[2,2])/nrow(train)
+sensitivity1 <- 41/(18+41)
+specificity1 <- 368/(368+80)
+
+accuracy1
+sensitivity1
+specificity1
+```
+The model gives us an accuracy of 0.8067, sensitivity of 0.6949, and specificity of 0.8214
+
+The implications of incorrectly classifying a parolee are quite dire. On one hand, incorrectly identifying a parolee as a violator could set them back severely in their personal life. On the other hand, incorrectly identifying a violating parolee as not violating can also have great impacts. This could lead to a potentially dangerous person being let off of parole, which poses a risk to the community at large.
+
+```{r Task 9}
+#using trial and error to find a probability threshold that best maximizes accuracy
+t9 = table(train$violator, predictions > 0.5)
+t9
+accuracy2 <- (t9[1,1]+t9[2,2])/nrow(train)
+accuracy2
+```
+
+0.5 as the threshold gets us an accuracy of about 0.89. Lets try a larger value
+
+larger values do not work, as you can see below. I commented out the code with errors so the document would knit
+
+```{r}
+#t10 = table(train$violator, predictions > 0.6)
+#t10
+#accuracy3 <- (t10[1,1]+t10[2,2])/nrow(train)
+#accuracy3
+```
+
+Let's try 0.55
+```{r}
+#t10 = table(train$violator, predictions > 0.55)
+#t10
+#accuracy3 <- (t10[1,1]+t10[2,2])/nrow(train)
+#accuracy3
+```
+That does not work either, how about 0.54?
+
+```{r}
+t10 = table(train$violator, predictions > 0.54)
+t10
+accuracy3 <- (t10[1,1]+t10[2,2])/nrow(train)
+accuracy3
+```
+
+0.54 seems to be the highest threshold value we can use without error. The accuracy is the same as when using 0.5. Our maximum accuracy is 0.8895464
+
+
+Let's use this threshold of 0.54 to test the accuracy of the model on the testing data
+
+```{r}
+#task 10
+#t11 = table(test$violator, predictions > 0.54)
+#t11
+#accuracy5 <- (t11[1,1]+t11[2,2])/nrow(test)
+#accuracy5
+```
+
+I am not entirely sure what the error here is. I have specified that I am using the test data.
+
+This is the error I am getting:
+Error in table(test$violator, predictions > 0.54) : all arguments must have the same length

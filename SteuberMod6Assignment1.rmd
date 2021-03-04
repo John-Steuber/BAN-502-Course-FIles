@@ -1,0 +1,197 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+```{r}
+trucks <- read_csv("trucks.csv")
+# Driver_ID is a unique identifer for each delivery driver, 
+# Distance is the average mileage driven by each driver in a day
+# Speeding is the percentage of the driver’s time in which he is driving at least 5 miles per hour over the speed limit.
+
+str(trucks)
+summary(trucks)
+
+```
+**Task 1 Examining relationships
+
+```{r}
+#plot distance and speeding
+ggplot(trucks, aes(Distance, Speeding)) +
+  geom_point()
+```
+
+We have two main clusters in the distance and speeding relationship. First, we have the drivers who are travelling an average distance between 25 and 75 miles each day. These drivers tend to speed less than 12.5% of the time, for the most part. There is a decent chunk of drivers in this first cluster that speed 25% of the time or more, and there are some outliers in this cluster who speed more than 50% of the time. 
+
+The second cluster is drivers driving an average distance of ~150 to ~225 miles everyday. Most of these drivers speed only about 25% or less of their time driving, but we do have outliers in this cluster as well. The outliers speed 75% or more of their time spent driving. 
+
+In general, if a driver is driving between 25 and 75 miles per day, they probably will not speed anymore than 50% of the time. However, if a driver is driving between 150 and 225 miles per day, they are more likely to speed than this first group. Upwarfs of 75% time spent speeding for the most part in cluster 2.
+
+**Task 2 Cleaning the data
+
+```{r}
+kmeans_recipe = recipe(~ Distance + Speeding, trucks)
+
+trucks_prep = kmeans_recipe %>%
+  step_scale(all_numeric()) %>%
+  step_center(all_numeric()) 
+
+trucks_prep2 = prep(trucks_prep, trucks) #prepares the recipe
+
+trucks_cleaned = bake(trucks_prep2, trucks) #applies the recipe and yields a data frame
+```
+
+**Task 3 k means clustering with k=2
+
+before starting, I want to just quickly compare the cleaned data to the original
+```{r}
+str(trucks_cleaned)
+summary(trucks_cleaned)
+```
+
+The trucks cleaned data has means of 0 for each variable, which is what we want when we scale and center the data. So we are all good here. 
+
+Now for the k means clustering
+```{r}
+set.seed(64)
+clusts = 
+  tibble(k = 1:2) %>%
+  mutate(
+    kclust = map(k, ~kmeans(trucks_cleaned, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, trucks_cleaned)
+  )
+
+clusts
+```
+
+creating relevant objects
+```{r}
+clusters = 
+  clusts %>%
+  unnest(cols = c(tidied))
+
+assignments = 
+  clusts %>% 
+  unnest(cols = c(augmented))
+
+clusterings = 
+  clusts %>%
+  unnest(cols = c(glanced))
+```
+
+visualization
+```{r}
+p1 = 
+  ggplot(assignments, aes(x = Distance, y = Speeding)) +
+  geom_point(aes(color = .cluster), alpha = 0.8)
+p1
+```
+
+From the cluster chart above, we can see a pretty similar outcome to that in the original graph in task 1. We have two distinct clusters, one with drivers who drive less distance, and one with drivers who drive much longer distances. Again, we are seeing that a larfer portion of the cluster 1 drivers are speeding. Cluster two has a smaller portion of drivers speeding, but the speeders in cluster 2 speed much more often than the speeders in cluster 1.
+
+**Task 4 Visualizing 1 to 8 clusters
+
+```{r}
+
+set.seed(412)
+clusts = 
+  tibble(k = 1:8) %>%
+  mutate(
+    kclust = map(k, ~kmeans(trucks_cleaned, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, trucks_cleaned)
+  )
+
+clusts
+```
+
+creating the objects again for 8 clusters
+```{r}
+clusters = 
+  clusts %>%
+  unnest(cols = c(tidied))
+
+assignments = 
+  clusts %>% 
+  unnest(cols = c(augmented))
+
+clusterings = 
+  clusts %>%
+  unnest(cols = c(glanced))
+```
+
+```{r}
+#cluster plots
+p2 = 
+  ggplot(assignments, aes(x = Distance, y = Speeding)) +
+  geom_point(aes(color = .cluster), alpha = 0.8) + 
+  facet_wrap(~ k)
+p2
+```
+
+Looking at the data split into 8 clusters leads me to believe that the ideal number of clusters is 4. I think that the drivers who drive less than 100 mils a day and speed less than 12.5% of the time (the bottom left area) does not need to be split up into more than 1 cluster. Maybe two clusters would be appropriate for this segment, but I think one cluster really works fine. I like the separation of the drivers driving under 100 miles per day and speeding more than 12.5% of the time. 
+
+For the drivers driving more than 100 miles per day, I like that we have the outliers in their own cluster. We still have a lot of density in the drivers who speed less than 25% of the time, so I think only two clusters is justifiable for this segment.
+
+
+**Task 5 Plotting k versus within cluster sum of squares
+
+```{r}
+ggplot(clusterings, aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point() + theme_bw()
+```
+
+The 'elbow' in the graph above is showing us that either 3.5 or 4 clusters would likely work best. We see diminishing returns above 4 clusters. I'm going to go with 4 clusters
+
+**Task 6 Repeating task 3 with 4 clusters this time
+
+```{r}
+set.seed(64)
+clusts = 
+  tibble(k = 1:4) %>%
+  mutate(
+    kclust = map(k, ~kmeans(trucks_cleaned, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, trucks_cleaned)
+  )
+
+clusts
+```
+
+
+relevant objects
+```{r}
+clusters = 
+  clusts %>%
+  unnest(cols = c(tidied))
+
+assignments = 
+  clusts %>% 
+  unnest(cols = c(augmented))
+
+clusterings = 
+  clusts %>%
+  unnest(cols = c(glanced))
+```
+
+visualization
+```{r}
+p3 = 
+  ggplot(assignments, aes(x = Distance, y = Speeding)) +
+  geom_point(aes(color = .cluster), alpha = 0.8)
+p3
+```
+
+4 clusters really looks optimal just from an eye test. Both clusters are separated based on frequency of speeding. I believe that this is most appropriate, because both clusters have a higher density in observations for drivers that speed less than 12.5% of the time (cluster 1), and 25% of the time (cluster 2). There is much less density in drivers that speed more often. 
+
+Additionally, I beleive that the distance splits are sensible. Looking at it as simply long distance or short distance is optimal for creating effective grouping. When we start to get into the minutae, like splitting the purple and green areas into multiple clusters, we ahve more chance for error in our grouping.

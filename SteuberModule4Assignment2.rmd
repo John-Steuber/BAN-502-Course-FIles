@@ -1,0 +1,252 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r, include=FALSE}
+#loading libraries
+library(tidyverse)
+library(tidymodels)
+library(caret)
+library(gridExtra)
+library(vip)
+library(ranger)
+```
+
+```{r}
+#loading data and adding column names
+drug <- read_csv("drug_data-1.csv")
+
+names(drug) = c("ID", "Age", "Gender", "Education", "Country", "Ethnicity",
+"Nscore", "Escore", "Oscore", "Ascore", "Cscore", "Impulsive",
+"SS", "Alcohol", "Amphet", "Amyl", "Benzos", "Caff", "Cannabis",
+"Choc", "Coke", "Crack", "Ecstasy", "Heroin", "Ketamine", "Legalh",
+"LSD", "Meth", "Mushrooms", "Nicotine", "Semer", "VSA")
+
+#str(drug) commenting out before knitting
+```
+
+```{r}
+#updating CL values
+drug[drug == "CL0"] = "No"
+drug[drug == "CL1"] = "No"
+drug[drug == "CL2"] = "Yes"
+drug[drug == "CL3"] = "Yes"
+drug[drug == "CL4"] = "Yes"
+drug[drug == "CL5"] = "Yes"
+drug[drug == "CL6"] = "Yes"
+
+```
+
+```{r}
+#factor conversion and recode
+drug_clean = drug %>% mutate_at(vars(Age:Ethnicity), funs(as_factor)) %>%
+mutate(Age = factor(Age, labels = c("18_24", "25_34", "35_44",
+"45_54", "55_64", "65_"))) %>%
+mutate(Gender = factor(Gender, labels = c("Male", "Female"))) %>%
+mutate(Education = factor(Education, labels =
+c("Under16", "At16", "At17", "At18", "SomeCollege",
+"ProfessionalCert", "Bachelors", "Masters", "Doctorate"))) %>%
+mutate(Country = factor(Country,
+labels = c("USA", "NewZealand", "Other", "Australia",
+"Ireland","Canada","UK"))) %>%
+mutate(Ethnicity = factor(Ethnicity,
+labels = c("Black", "Asian", "White", "White/Black", "Other",
+"White/Asian", "Black/Asian"))) %>%
+  mutate_at(vars(Alcohol:VSA), funs(as_factor)) %>%
+select(-ID)
+
+#str(drug_clean) commenting out before knitting
+```
+
+```{r}
+#because we are focusing on nicotine, we have to remove the remaining drugs from the data
+
+drug_clean = drug_clean %>% select(!(Alcohol:Mushrooms)) %>% select(!(Semer:VSA))
+names(drug_clean)
+```
+
+all other drugs have been successfully removed
+
+**Task 1
+
+please note I had to comment out the skim command here because it was not allowing me to knit to word. Not sure why.
+```{r}
+#missingness check
+#skim(drug_clean)
+```
+
+does not look like we have any missing data in the cleaned data
+
+**Task 2
+
+```{r}
+#splitting into train and test
+
+set.seed(1234) 
+drug_clean_split = initial_split(drug_clean, prop = 0.7, strata = Nicotine) #70% in training
+train = training(drug_clean_split)
+test = testing(drug_clean_split)
+```
+
+**Task 3
+
+I arranged certain charts in groups of 2 or alone for better visualization
+```{r}
+p1 = ggplot(train, aes(x = Age, fill = Nicotine)) + geom_bar(position = "fill")
+p2 = ggplot(train, aes(x = Gender, fill = Nicotine)) + geom_bar(position = "fill")
+grid.arrange(p1,p2)
+```
+
+It appears that younger people, specifically younger than age 45 are more likely to use nicotine. Males also seem to be more likely to use nicotine than females.
+
+```{r}
+p3 = ggplot(train, aes(x = Education, fill = Nicotine)) + geom_bar(position = "fill")
+p4 = ggplot(train, aes(x = Country, fill = Nicotine)) + geom_bar(position = "fill")
+grid.arrange(p3,p4)
+```
+
+I am not surprised by the trend of people with less education using nicotine more than those with more education. It seems like countries with less harsh tobacco regulations have more nicotine use. These countries being USA, Ireland, and other. 
+
+```{r}
+p5 = ggplot(train, aes(x = Ethnicity, fill = Nicotine)) + geom_bar(position = "fill")
+p5
+```
+
+It is interesting to me that mixed race people seem to be more likely to use nicotine than people who are not mixed race. We can also see that white/black and white/asian are the two groups most associated with nicotine use.
+
+```{r}
+p6 = ggplot(train, aes(x = Nicotine, y = Nscore)) + geom_boxplot()
+p7 = ggplot(train, aes(x = Nicotine, y = Escore)) + geom_boxplot()
+p8 = ggplot(train, aes(x = Nicotine, y = Oscore)) + geom_boxplot()
+p9 = ggplot(train, aes(x = Nicotine, y = Ascore)) + geom_boxplot()
+p10 = ggplot(train, aes(x = Nicotine, y = Cscore)) + geom_boxplot()
+p11 = ggplot(train, aes(x = Nicotine, y = Impulsive)) + geom_boxplot()
+p12 = ggplot(train, aes(x = Nicotine, y = SS)) + geom_boxplot()
+grid.arrange(p6, p7, p8, p9, p10, p11, p12, ncol = 4)
+```
+
+From the boxplots we can see that Nscore, Oscore, Impulsiveness, and SS are all associated with nicotine use. Neuroticism, openness,impulsivity, and sensation seeing are all things that I would expect to be associated with nicotine use and use of other substances.
+
+**Task 4
+
+Creating folds
+```{r}
+set.seed(123)
+rf_folds = vfold_cv(train, v = 5)
+```
+
+now creating rf model
+
+```{r}
+train_recipe = recipe(Nicotine ~., train) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 100) %>% #add tuning of mtry and min_n parameters
+  set_engine("ranger", importance = "permutation") %>% #added importance metric
+  set_mode("classification")
+
+train_wflow = 
+  workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(train_recipe)
+
+rf_grid = grid_regular(
+  mtry(range = c(2, 8)), 
+  min_n(range = c(5, 20)), 
+  levels = 10
+)
+
+set.seed(123)
+rf_res_tuned = tune_grid(
+  train_wflow,
+  resamples = rf_folds,
+  grid = rf_grid #use the tuning grid
+)
+```
+
+
+Visualizing parameters
+
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  select(mean, min_n, mtry) %>%
+  pivot_longer(min_n:mtry,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "Accuracy")
+```
+
+lets look at another view becuase I find the above to be a bit busy for my taste
+
+```{r}
+rf_res_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  mutate(min_n = factor(min_n)) %>%
+  ggplot(aes(mtry, mean, color = min_n)) +
+  geom_line(alpha = 0.5, size = 1.5) +
+  geom_point() +
+  labs(y = "Accuracy")
+```
+
+Here we can zee that our highest accuracy comes with a min_n of 20 and an mtry around 3
+
+**Task 5
+
+developing the best rf model
+```{r}
+best_rf = select_best(rf_res_tuned, "accuracy")
+
+final_rf = finalize_workflow(
+  train_wflow,
+  best_rf
+)
+
+final_rf
+```
+
+As expected, our mtry is 3 and the min n is 20. Good.
+
+```{r}
+#fit the finalized workflow to our training data
+final_rf_fit = fit(final_rf, train)
+```
+
+Examining variable importance
+
+```{r}
+final_rf_fit %>% pull_workflow_fit() %>% vip(geom = "point")
+```
+
+I am not surprised to see sensation seeking as the most important variable. After all, it is kind of intuitive that someone open to seeking new experiences is going to be more likely to use substances. We can also see Openness score as a top 3 variable, which is in line with our initial visual analysis. Hailing from the UK is also a big factor in nicotine use, because the UK is the country with the least nicotine use in our data. The other variables here are mostly unsurprising. Impulsiveness, agreeableness, and low education are all things I would expect to see correlated with drug use.
+
+**Task 6
+
+lets see how this model performs on test and train data
+
+```{r}
+trainpredrf = predict(final_rf_fit, train)
+head(trainpredrf)
+confusionMatrix(trainpredrf$.pred_class, train$Nicotine, 
+                positive = "Yes")
+```
+
+```{r}
+testpredrf = predict(final_rf_fit, test)
+head(testpredrf)
+confusionMatrix(testpredrf$.pred_class, test$Nicotine, 
+                positive = "Yes")
+```
+
+The model has a pretty large drop off in accuracy between test and training data. Our accuracy of 84.32% on the training data is much better than 71.15% on the test set. Both models are decently better than the no information model which is reassuring. 
+
+**Task 7
+
+This model could have real world application in trying to develop a better understanding of at risk groups for nicotine use in the countries sampled. With improvements I would be comfortable using this model, but the testing data performance leaves something to be desired. I would be concerned mainly with inaccurate prediction of Nicotine use due to interaction with other predictors. For example, other drugs may have a high correlation with nicotine use. This is something that may need to be more carefully examined before looking at one drug on its own. 

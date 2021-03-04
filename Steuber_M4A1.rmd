@@ -1,0 +1,328 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r}
+#loading libraries and importing data
+library(tidyverse)
+library(tidymodels)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+
+parole <- read_csv("parole (1).csv")
+```
+
+Converting necessary variables into factors and recoding
+
+```{r}
+parole = parole %>%
+  mutate(male = as_factor(male)) %>%
+  mutate(male = fct_recode(male, "male" = "1", "female" = "0")) %>%
+   mutate(race = as_factor(race)) %>%
+  mutate(race = fct_recode(race, "white" = "1", "other" = "2")) %>%
+   mutate(state = as_factor(state)) %>%
+  mutate(state = fct_recode(state, "Kentucky" = "2", "Louisiana" = "3", "Virginia" = "4", "Other" = "1")) %>%
+   mutate(crime = as_factor(crime)) %>%
+  mutate(crime = fct_recode(crime, "larceny" = "2", "drug-related crime" = "3", "driving-related crime" = "4", "other" = "1")) %>%
+   mutate(multiple.offenses = as_factor(multiple.offenses)) %>%
+  mutate(multiple.offenses = fct_recode(multiple.offenses, "yes" = "1", "no" = "0")) %>%
+  mutate(violator = as_factor(violator)) %>%
+  mutate(violator = fct_recode(violator, "yes" = "1", "no" = "0"))
+```
+
+**Task 1**
+
+Splitting data into testing and training sets. For this assignment, the training set will have 70% of the data.
+```{r}
+#creating our training and testing splits
+set.seed(12345) 
+parole_split = initial_split(parole, prob = 0.70, strata = violator) #setting 70% of data to be in the training split
+train = training(parole_split)
+test = testing(parole_split)
+```
+
+Creating the initial model to predict violator and plotting classification tree
+```{r}
+violator_recipe = recipe(violator ~., train)%>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model = decision_tree() %>% 
+  set_engine("rpart", model = TRUE) %>% #model = TRUE is necessary here
+  set_mode("classification")
+
+violator_wflow = 
+  workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(violator_recipe)
+
+violator_fit = fit(violator_wflow, train)
+```
+
+**Task 2**
+
+Now looking at and extracting our tree's fit, and then plotting the tree
+```{r}
+violator_fit %>%
+  pull_workflow_fit() %>%
+  pluck("fit")  
+```
+
+```{r}
+tree = violator_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+rpart.plot(tree)
+```
+
+This is hard to read so I am going to tweak
+```{r}
+#fancyRpartPlot(tree, tweak=1) #1.5 is my initial value, will increase or decrease if necessary
+
+#i had to comment out the above code, because it was not letting my RMD file knit
+```
+This is a little easier to read, still not perfect but it'll do.
+
+**Task 3**
+
+A 40 year old parolee from Louisiana who served 5 years with a sentence of 10 years, and committed multiple offenses should be classified as VIOLATING PAROLE according to the above tree.
+
+I arrived at this classification by following the tree. This prisoner did not hail from Lousiana, they did commit multiple offenses, and they did not serve more than 6.5 years, they are older than 20, and older than 27. The model suggests they are more likely to violate parole, and 2% of the training data falls into these parameters. Interestingly, the total sentence for this parolee did not matter in this example. 
+
+**Task 4**
+
+Examining CP values tried by R
+```{r}
+violator_fit$fit$fit$fit$cptable
+```
+
+The optimal CP value here is 0.03389381. I am going to look at the confusion matrix for the training data to check on accuracy.
+
+```{r}
+treepred = predict(violator_fit, train, type = "class")
+head(treepred)
+```
+
+```{r}
+confusionMatrix(treepred$.pred_class,train$violator,positive="yes")
+```
+
+91.5% accuracy is pretty good, and our p value is below .05. Our sensitivity is low compared to specificity however. I'm going to now look at the test data confusion matrix for comparison sake.
+
+```{r}
+treepred2 = predict(violator_fit, test, type = "class")
+head(treepred)
+```
+
+```{r}
+confusionMatrix(treepred2$.pred_class,test$violator,positive="yes")
+```
+
+The accuracy for the test data is lower at 88.1%, and the p value is above .05 meaning that this is not statistically significant. With the test data we also have a much lower sensitivity.
+
+At this point, I would not say that the tree in task 2 is associated with optimal CP.
+
+**Task 5
+
+creating folds
+
+```{r}
+set.seed(123)
+folds = vfold_cv(train, v = 5)
+```
+
+creating model and different cp iterations
+
+```{r}
+violator_recipe2 = recipe(violator ~., train) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+tree_model2 = decision_tree(cost_complexity = tune()) %>% 
+  set_engine("rpart", model = TRUE) %>% #don't forget the model = TRUE flag
+  set_mode("classification")
+
+tree_grid2 = grid_regular(cost_complexity(),
+                          levels = 25) #try 25 sensible values for cp
+
+violator_wflow2 = 
+  workflow() %>% 
+  add_model(tree_model2) %>% 
+  add_recipe(violator_recipe2)
+
+tree_res2 = 
+  violator_wflow2 %>% 
+  tune_grid(
+    resamples = folds,
+    grid = tree_grid2
+    )
+
+tree_res2
+```
+
+```{r}
+tree_res2 %>%
+  collect_metrics() %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) 
+```
+
+```{r}
+best_tree = tree_res2 %>%
+  select_best("accuracy")
+
+best_tree
+```
+
+**Task 6
+
+Our 'optimal' cp value is 0.1
+
+
+** Task 7
+
+```{r}
+#creating final workflow
+final_wf = 
+  violator_wflow2 %>% 
+  finalize_workflow(best_tree)
+```
+
+```{r}
+final_fit = fit(final_wf, train)
+
+final_tree = final_fit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+#fancyRpartPlot(final_tree, tweak = 1.5) 
+```
+
+The above code generated the error as described in the assignment instructions. It created a 'root', meaning that there are no branches on our classification tree. Because the majority of parolees do not violate, this 'root' is naively predicting that all parolees will not violate.
+
+**Task 8
+
+So, how do we determine the accuracy of this root? Well, we obviously know that some parolees will violate, and some will not violate. One way, and the way I think is 'best' is to look at the training data. We can see that there are 507 observations, and the rate of violation in the training data is 59/448, or about 13.17%
+
+```{r}
+summary(train$violator)
+```
+
+Now we can use the accuracy equation of # Correct / Total # to estimate the accuracy of the root. The root would correctly predict 448/507 observations, giving us an estimated accuracy of 88.36%.
+
+**Task 9
+
+```{r}
+blood <- read_csv("Blood.csv")
+```
+
+```{r}
+blood = blood %>%
+  mutate(DonatedMarch = as_factor(DonatedMarch)) %>%
+  mutate(male = fct_recode(DonatedMarch, "no" = "0", "yes" = "1"))
+```
+
+```{r}
+#creating our training and testing splits
+set.seed(1234) 
+blood_split = initial_split(blood, prob = 0.70, strata = DonatedMarch) #setting 70% of data to be in the training split
+train2 = training(blood_split)
+test2 = testing(blood_split)
+```
+
+```{r}
+#creating new classification tree for the blood data
+
+set.seed(1234)
+folds2 = vfold_cv(train2, v = 5)
+
+blood_recipe = recipe(DonatedMarch ~., train2) %>%
+  step_dummy(all_nominal(),-all_outcomes())
+
+blood_model = decision_tree(cost_complexity = tune()) %>% 
+  set_engine("rpart", model = TRUE) %>% #don't forget the model = TRUE flag
+  set_mode("classification")
+
+blood_grid = grid_regular(cost_complexity(),
+                          levels = 25) #try 25 sensible values for cp
+
+blood_wflow = 
+  workflow() %>% 
+  add_model(blood_model) %>% 
+  add_recipe(blood_recipe)
+
+bloodtree_res = 
+  blood_wflow %>% 
+  tune_grid(
+    resamples = folds2,
+    grid = blood_grid
+    )
+
+bloodtree_res
+
+```
+
+
+Now lets examine our new tree's accuracy
+
+```{r}
+bloodtree_res %>%
+  collect_metrics() %>%
+  ggplot(aes(cost_complexity, mean)) +
+  geom_line(size = 1.5, alpha = 0.6) +
+  geom_point(size = 2) +
+  facet_wrap(~ .metric, scales = "free", nrow = 2) 
+```
+
+It appears that we do not have an 'optimal' cp value here. We could pick any value and our accuracy remains the same.
+
+```{r}
+best_bloodtree = bloodtree_res %>%
+  select_best("accuracy")
+
+best_bloodtree
+```
+
+now I can create the final workflow and tree
+
+**Task 10
+
+```{r}
+final_bloodwf = 
+  blood_wflow %>% 
+  finalize_workflow(best_bloodtree)
+
+final_bloodfit = fit(final_bloodwf, train2)
+
+final_bloodtree = final_bloodfit %>% 
+  pull_workflow_fit() %>% 
+  pluck("fit")
+
+#fancyRpartPlot(final_bloodtree, tweak = 1.5) #again commenting out for proper knitting
+```
+
+So this tree for the blood data is suggesting that if a patient is male, they have donated blood in march.
+
+**Task 11
+
+```{r}
+summary(train2$DonatedMarch)
+summary(train2$male)
+```
+
+For the training data, we have 134 people who donated in March, and the training data has 134 males. If we look at the training data set, this is true. All 134 males in the training data did donate in March. None of the 428 females in the training data donated in March. This means that the classification tree is 100% accurate for the training data
+
+Now for the test data
+
+```{r}
+summary(test2$DonatedMarch)
+summary(test2$male)
+```
+
+The testing set has the same issue as the training set. All males in the testing data also donated in March, and none of the females in the testing data donated in March.
+
+Given that both the test and training data are showing our classification tree as 100% accurate, what can we glean here? I believe the most reasonable explanation is that our data set is imbalanced. Perhaps there was some sort of incentive in March for men to donate, or maybe it was an extremely odd coincidence. Regardless, we may want to perform column wise deletion of the donated in march variable. 
